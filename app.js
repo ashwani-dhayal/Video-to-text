@@ -1,0 +1,161 @@
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const FormData = require('form-data');
+const readline = require('readline');
+
+// Your AssemblyAI API key
+const apiKey = "1ed1f96bcb4441038ce128a5919d6d9c";
+
+// Create necessary directories if they don't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+const transcriptionsDir = path.join(__dirname, 'transcriptions');
+
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir);
+}
+
+if (!fs.existsSync(transcriptionsDir)) {
+    fs.mkdirSync(transcriptionsDir);
+}
+
+// Function to upload the file
+async function uploadFile(filePath) {
+    console.log("Uploading file...");
+    
+    const formData = new FormData();
+    formData.append('file', fs.createReadStream(filePath));
+    
+    try {
+        const response = await axios.post('https://api.assemblyai.com/v2/upload', 
+            formData,
+            {
+                headers: {
+                    'authorization': apiKey,
+                    ...formData.getHeaders()
+                }
+            }
+        );
+        
+        return response.data.upload_url;
+    } catch (error) {
+        console.error("Error uploading file:", error.response?.data || error.message);
+        return null;
+    }
+}
+
+// Function to transcribe the uploaded file
+async function transcribeFile(uploadUrl) {
+    console.log("Submitting file for transcription...");
+    
+    try {
+        const response = await axios.post(
+            'https://api.assemblyai.com/v2/transcript',
+            {
+                audio_url: uploadUrl
+            },
+            {
+                headers: {
+                    'authorization': apiKey,
+                    'content-type': 'application/json'
+                }
+            }
+        );
+        
+        return response.data.id;
+    } catch (error) {
+        console.error("Error submitting file for transcription:", error.response?.data || error.message);
+        return null;
+    }
+}
+
+// Function to get the transcription result
+async function getTranscription(transcriptId) {
+    console.log("Waiting for transcription to complete...");
+    
+    const pollingEndpoint = https://api.assemblyai.com/v2/transcript/${transcriptId};
+    
+    while (true) {
+        try {
+            const response = await axios.get(pollingEndpoint, {
+                headers: {
+                    'authorization': apiKey
+                }
+            });
+            
+            const transcriptionResult = response.data;
+            
+            if (transcriptionResult.status === 'completed') {
+                console.log("Transcription completed!");
+                return transcriptionResult.text;
+            } else if (transcriptionResult.status === 'error') {
+                console.error("Transcription error:", transcriptionResult.error);
+                return null;
+            } else {
+                console.log(Transcription status: ${transcriptionResult.status});
+                // Wait 5 seconds before checking again
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+        } catch (error) {
+            console.error("Error getting transcription:", error.response?.data || error.message);
+            return null;
+        }
+    }
+}
+
+// Main function to convert MP4 to text
+async function mp4ToText(filePath, outputFile = null) {
+    // Upload the file
+    const uploadUrl = await uploadFile(filePath);
+    if (!uploadUrl) return;
+    
+    // Submit for transcription
+    const transcriptId = await transcribeFile(uploadUrl);
+    if (!transcriptId) return;
+    
+    // Get the transcription result
+    const transcription = await getTranscription(transcriptId);
+    if (!transcription) return;
+    
+    // Save the transcription to a file if specified
+    if (outputFile) {
+        fs.writeFileSync(outputFile, transcription);
+        console.log(Transcription saved to ${outputFile});
+    }
+    
+    return transcription;
+}
+
+// Create readline interface for user input
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+rl.question('Enter the name of your MP4 file in the uploads folder: ', async (videoFilename) => {
+    const videoFile = path.join(uploadsDir, videoFilename);
+    
+    if (!fs.existsSync(videoFile)) {
+        console.error(Error: File ${videoFile} does not exist);
+        rl.close();
+        return;
+    }
+    
+    // Create output filename based on input filename
+    const outputFilename = path.basename(videoFilename, path.extname(videoFilename)) + '.txt';
+    const outputFile = path.join(transcriptionsDir, outputFilename);
+    
+    try {
+        const transcription = await mp4ToText(videoFile, outputFile);
+        if (transcription) {
+            console.log("\nTranscription preview:");
+            console.log(transcription.length > 500 ? 
+                transcription.substring(0, 500) + "..." : 
+                transcription);
+        }
+    } catch (error) {
+        console.error("Error:", error);
+    } finally {
+        rl.close();
+    }
+});
